@@ -15,6 +15,7 @@
 *.obj
 AndroidSigningProperties.txt
 *Copy*
+testgrid.png
 
 # Heap trace
 heap.trc

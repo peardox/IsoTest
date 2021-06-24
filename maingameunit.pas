@@ -21,8 +21,14 @@ uses
   CastleApplicationProperties, CastleLog, CastleTimeUtils, CastleKeysMouse;
 
 type
-  { TCastleSceneHelper }
+  { TUIStateHelper }
+  TUIStateHelper = class helper for TUIState
+  public
+    procedure CreateButton(var objButton: TCastleButton; const ButtonText: String; const Line: Integer; const ButtonCode: TNotifyEvent = nil; const BottomUp: Boolean = True);
+    procedure CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
+  end;
 
+  { TCastleSceneHelper }
   TCastleSceneHelper = class helper for TCastleScene
   public
      procedure Normalize;
@@ -40,21 +46,27 @@ type
     function  Release(const Event: TInputPressRelease): Boolean; override; // TUIState
   private
     Viewport: TCastleViewport;
+    VPBackImage: TCastleImageControl;
     Scene: TCastleScene;
     LabelFPS: TCastleLabel;
     LabelRender: TCastleLabel;
-    LabelSpare: TCastleLabel;
+    BigRedButton: TCastleButton;
+    AnotherRedButton: TCastleButton;
+    DieOnResize: Boolean;
   public
-    AStringList: TStringList;
-
+    constructor Create(AOwner: TComponent); override;
+    procedure BlowUpResize(Sender: TObject);
+    procedure BlowUpWorld(Sender: TObject);
+    destructor Destroy; override;
     procedure BootStrap;
-    procedure CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
     procedure Start; override; // TUIState
     procedure Stop; override; // TUIState
     procedure LoadViewport;
     procedure LoadScene(filename: String);
     procedure ViewFromRadius(const ARadius: Single; const ADirection: TVector3);
   end;
+
+function MakeTransparentLayerGrid(const ASpriteWidth: Cardinal; const ASpriteHeight: Cardinal; const AViewWidth: Cardinal; const AViewHeight: Cardinal; const GridSize: Cardinal = 8): TCastleImage;
 
 var
   AppTime: Int64;
@@ -68,6 +80,15 @@ uses AppInitialization;
 {$else}
 uses GUIInitialization;
 {$endif}
+constructor TCastleApp.Create(AOwner: TComponent);
+begin
+  inherited Create(AOwner);
+end;
+
+destructor TCastleApp.Destroy;
+begin
+  inherited;
+end;
 
 { TCastleSceneHelper }
 
@@ -104,25 +125,6 @@ begin
   WriteLnLog('ProcTimer (LoadScene) = ' + FormatFloat('####0.000', ProcTimer / 1000) + ' seconds');
 end;
 
-procedure TCastleApp.CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
-begin
-  objLabel := TCastleLabel.Create(Application);
-  objLabel.Padding := 5;
-  objLabel.Color := White;
-  objLabel.Frame := True;
-  objLabel.FrameColor := Black;
-  objLabel.Anchor(hpLeft, 10);
-  if RightAlign then
-    objLabel.Anchor(hpRight, -10)
-  else
-    objLabel.Anchor(hpLeft, 10);
-  if BottomUp then
-    objLabel.Anchor(vpBottom, 10 + (Line * 35))
-  else
-    objLabel.Anchor(vpTop, -(10 + (Line * 35)));
-  InsertFront(objLabel);
-end;
-
 procedure TCastleApp.ViewFromRadius(const ARadius: Single; const ADirection: TVector3);
 var
   Spherical: TVector3;
@@ -136,10 +138,15 @@ end;
 
 procedure TCastleApp.LoadViewport;
 begin
-  Viewport := TCastleViewport.Create(Application);
+  VPBackImage := TCastleImageControl.Create({$ifndef cgeapp}CastleForm.{$endif}Window);
+  VPBackImage.OwnsImage := True;
+  InsertFront(VPBackImage);
+
+  Viewport := TCastleViewport.Create({$ifndef cgeapp}CastleForm.{$endif}Window);
   Viewport.FullSize := False;
   Viewport.AutoCamera := False;
   Viewport.Setup2D;
+  Viewport.Transparent := True;
   Viewport.NavigationType := ntNone;
   Viewport.AssignDefaultCamera;
   Viewport.Width := StateContainer.Width;
@@ -152,7 +159,9 @@ begin
 
   InsertFront(Viewport);
 
-  CreateLabel(LabelSpare, 2);
+  CreateButton(BigRedButton, 'Blow up world', 0, @BlowUpWorld);
+  CreateButton(AnotherRedButton, 'Blow up on ReSize', 0, @BlowUpResize, False);
+
   CreateLabel(LabelFPS, 1);
   CreateLabel(LabelRender, 0);
 
@@ -218,6 +227,22 @@ end;
 procedure TCastleApp.Resize;
 begin
   inherited;
+  if DieOnResize then
+    BlowUpWorld(nil);
+end;
+
+procedure TCastleApp.BlowUpResize(Sender: TObject);
+begin
+  DieOnResize := True;
+end;
+
+procedure TCastleApp.BlowUpWorld(Sender: TObject);
+begin
+  VPBackImage.Image := MakeTransparentLayerGrid(64, 64, Trunc(Viewport.Width), Trunc(Viewport.Height), 8);
+  VPBackImage.Left := Viewport.Left;
+  VPBackImage.Bottom := Viewport.Bottom;
+  VPBackImage.Width := Viewport.Width;
+  VPBackImage.Height := Viewport.Height;
 end;
 
 procedure TCastleApp.Update(const SecondsPassed: Single; var HandleInput: boolean);
@@ -239,6 +264,95 @@ function TCastleApp.Release(const Event: TInputPressRelease): Boolean;
 begin
   Result := inherited;
 end;
+
+procedure TUIStateHelper.CreateButton(var objButton: TCastleButton; const ButtonText: String; const Line: Integer; const ButtonCode: TNotifyEvent = nil; const BottomUp: Boolean = True);
+begin
+  objButton := TCastleButton.Create(Self);
+  objButton.Caption := ButtonText;
+  objButton.Anchor(hpMiddle, 10);
+  if BottomUp then
+    objButton.Anchor(vpBottom, 10 + (Line * 35))
+  else
+    objButton.Anchor(vpTop, -(10 + (Line * 35)));
+  objButton.onClick := ButtonCode;
+  InsertFront(objButton);
+end;
+
+procedure TUIStateHelper.CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
+begin
+  objLabel := TCastleLabel.Create(Self);
+  objLabel.Padding := 5;
+  objLabel.Color := White;
+  objLabel.Frame := True;
+  objLabel.FrameColor := Black;
+  objLabel.Anchor(hpLeft, 10);
+  if RightAlign then
+    objLabel.Anchor(hpRight, -10)
+  else
+    objLabel.Anchor(hpLeft, 10);
+  if BottomUp then
+    objLabel.Anchor(vpBottom, 10 + (Line * 35))
+  else
+    objLabel.Anchor(vpTop, -(10 + (Line * 35)));
+  InsertFront(objLabel);
+end;
+
+function MakeTransparentLayerGrid(const ASpriteWidth: Cardinal; const ASpriteHeight: Cardinal; const AViewWidth: Cardinal; const AViewHeight: Cardinal; const GridSize: Cardinal = 8): TCastleImage;
+var
+  img: TCastleImage;
+  XPos: Cardinal;
+  YPos: Cardinal;
+  XGrid: Single;
+  YGrid: Single;
+  Skip: Integer;
+  LightGrey: TCastleColor;
+begin
+  img := TRGBImage.Create(AViewWidth, AViewHeight);
+  LightGrey := Red; // HexToColor('B2B2B2');
+  img.Clear(HexToColor('838383'));
+  XGrid := AViewWidth / ASpriteWidth;
+  YGrid := AViewHeight / ASpriteHeight;
+
+//  WriteLnLog('BlobVars : ' + IntToStr(GridSize) + ' - ' + FloatToStr(XGrid) + ' - ' + FloatToStr(YGrid) + LineEnding);
+  for YPos := 0 to (ASpriteHeight div GridSize) - 1 do
+    begin
+      Skip := YPos Mod 2;
+      for XPos := 0 to (ASpriteWidth div GridSize) - 1 do
+        begin
+          if (((Skip + XPos) Mod 2) = 0) then
+            begin
+              img.FillRectangle(Trunc(XPos * GridSize * XGrid), Trunc(YPos * GridSize * YGrid),
+                Trunc(((XPos + 1) * GridSize * XGrid)) - 1, Trunc(((YPos + 1) * GridSize * YGrid)) - 1,
+                LightGrey);
+{
+              WriteLnLog('Red Blob : ' + IntToStr(Skip + XPos) + ' = ' +
+                IntToStr(Trunc(XPos * GridSize * XGrid)) + ', ' +
+                IntToStr(Trunc(YPos * GridSize * YGrid)) + ' - ' +
+                IntToStr(Trunc(((XPos + 1) * GridSize * XGrid)) - 1) + ', ' +
+                IntToStr(Trunc(((YPos + 1) * GridSize * YGrid)) - 1));
+}
+            end
+          else
+          begin
+            img.FillRectangle(Trunc(XPos * GridSize * XGrid), Trunc(YPos * GridSize * YGrid),
+              Trunc(((XPos + 1) * GridSize * XGrid)) - 1, Trunc(((YPos + 1) * GridSize * YGrid)) - 1,
+              Blue);
+{
+            WriteLnLog('Blue Blob : ' + IntToStr(Skip + XPos) + ' = ' +
+              IntToStr(Trunc(XPos * GridSize * XGrid)) + ', ' +
+              IntToStr(Trunc(YPos * GridSize * YGrid)) + ' - ' +
+              IntToStr(Trunc(((XPos + 1) * GridSize * XGrid)) - 1) + ', ' +
+              IntToStr(Trunc(((YPos + 1) * GridSize * YGrid)) - 1));
+}
+           end;
+        end;
+    end;
+//  SaveImage(img, 'testgrid.png');
+
+  Result := img;
+end;
+
+
 
 end.
 
