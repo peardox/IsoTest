@@ -9,8 +9,8 @@ object CastleForm: TCastleForm
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   Position = poDefault
-  LCLVersion = '2.0.10.0'
-  object Window: TCastleControlBase
+  LCLVersion = '2.2.6.0'
+  object Window: TCastleControl
     Left = 0
     Height = 240
     Top = 0

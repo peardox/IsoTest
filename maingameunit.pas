@@ -5,24 +5,24 @@ unit MainGameUnit;
 interface
 
 uses
-  Classes, SysUtils, Math, CastleUIState,
+  Classes, SysUtils, Math,
   {$ifndef cgeapp}
   Forms, Controls, Graphics, Dialogs, CastleControl,
   {$else}
   CastleWindow,
   {$endif}
   CastleControls, CastleColors, CastleUIControls,
-  CastleTriangles, CastleShapes, CastleVectors,
+  CastleShapes, CastleVectors,
   CastleSceneCore, CastleScene, CastleTransform,
   CastleViewport, CastleCameras, CastleProjection,
-  X3DNodes, X3DFields, X3DTIme,
+  X3DNodes, X3DFields,
   CastleImages, CastleGLImages,
-  CastleTextureImages, CastleCompositeImage,
+  CastleTextureImages,
   CastleApplicationProperties, CastleLog, CastleTimeUtils, CastleKeysMouse;
 
 type
-  { TUIStateHelper }
-  TUIStateHelper = class helper for TUIState
+  { TCastleViewHelper }
+  TCastleViewHelper = class helper for TCastleView
   public
     procedure CreateButton(var objButton: TCastleButton; const ButtonText: String; const Line: Integer; const ButtonCode: TNotifyEvent = nil; const BottomUp: Boolean = True);
     procedure CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
@@ -36,32 +36,35 @@ type
 
   { TCastleApp }
 
-  TCastleApp = class(TUIState)
+  TCastleApp = class(TCastleView)
     procedure BeforeRender; override; // TCastleUserInterface
     procedure Render; override; // TCastleUserInterface
     procedure Resize; override; // TCastleUserInterface
-    procedure Update(const SecondsPassed: Single; var HandleInput: boolean); override; // TUIState
-    function  Motion(const Event: TInputMotion): Boolean; override; // TUIState
-    function  Press(const Event: TInputPressRelease): Boolean; override; // TUIState
-    function  Release(const Event: TInputPressRelease): Boolean; override; // TUIState
+    procedure Update(const SecondsPassed: Single; var HandleInput: boolean); override; // TCastleView
+    function  Motion(const Event: TInputMotion): Boolean; override; // TCastleView
+    function  Press(const Event: TInputPressRelease): Boolean; override; // TCastleView
+    function  Release(const Event: TInputPressRelease): Boolean; override; // TCastleView
   private
     Viewport: TCastleViewport;
+    Camera: TCastleCamera;
     VPBackImage: TCastleImageControl;
     Scene: TCastleScene;
+    LabelBBMin: TCastleLabel;
+    LabelBBMax: TCastleLabel;
+    LabelCam: TCastleLabel;
     LabelFPS: TCastleLabel;
     LabelRender: TCastleLabel;
     BigRedButton: TCastleButton;
-    AnotherRedButton: TCastleButton;
-    DieOnResize: Boolean;
+    keyShift: Boolean;
   public
     constructor Create(AOwner: TComponent); override;
-    procedure BlowUpResize(Sender: TObject);
     procedure BlowUpWorld(Sender: TObject);
     destructor Destroy; override;
     procedure BootStrap;
-    procedure Start; override; // TUIState
-    procedure Stop; override; // TUIState
+    procedure Start; override; // TCastleView
+    procedure Stop; override; // TCastleView
     procedure LoadViewport;
+    function CreateDirectionalLight(LightPos: TVector3): TCastleDirectionalLight;
     procedure LoadScene(filename: String);
     procedure ViewFromRadius(const ARadius: Single; const ADirection: TVector3);
   end;
@@ -73,6 +76,7 @@ var
   PrepDone: Boolean;
   RenderReady: Boolean;
   CastleApp: TCastleApp;
+  DbgSingle: Single;
 
 implementation
 {$ifdef cgeapp}
@@ -94,6 +98,8 @@ end;
 
 { Normalize - Center the model in a 1x1x1 cube }
 procedure TCastleSceneHelper.Normalize;
+var
+  BBMax: Single;
 begin
   if not(RootNode = nil) then
     begin
@@ -101,12 +107,14 @@ begin
       begin
         if BoundingBox.MaxSize > 0 then
           begin
-            Center := Vector3(Min(BoundingBox.Data[0].X, BoundingBox.Data[1].X) + (BoundingBox.SizeX / 2),
-                              Min(BoundingBox.Data[0].Y, BoundingBox.Data[1].Y) + (BoundingBox.SizeY / 2),
-                              Min(BoundingBox.Data[0].Z, BoundingBox.Data[1].Z) + (BoundingBox.SizeZ / 2));
-            Scale := Vector3(1 / BoundingBox.MaxSize,
-                             1 / BoundingBox.MaxSize,
-                             1 / BoundingBox.MaxSize);
+            Center := Vector3(Min(LocalBoundingBox.Data[0].X, LocalBoundingBox.Data[1].X) + (LocalBoundingBox.SizeX / 2),
+                              Min(LocalBoundingBox.Data[0].Y, LocalBoundingBox.Data[1].Y) + (LocalBoundingBox.SizeY / 2),
+                              Min(LocalBoundingBox.Data[0].Z, LocalBoundingBox.Data[1].Z) + (LocalBoundingBox.SizeZ / 2));
+            BBMax := LocalBoundingBox.MaxSize;
+            Scale := Vector3(1 / BBMax,
+                             1 / BBMax,
+                             1 / BBMax);
+            DbgSingle := Scale.X;
             Translation := -Center;
           end;
       end;
@@ -115,14 +123,32 @@ end;
 
 { TCastleApp }
 
+function TCastleApp.CreateDirectionalLight(LightPos: TVector3): TCastleDirectionalLight;
+var
+  Light: TCastleDirectionalLight;
+begin
+  Light := TCastleDirectionalLight.Create(Self);
+
+  Light.Direction := LightPos;
+  Light.Color := Vector3(1, 1, 1);
+  Light.Intensity := 1;
+
+  Result := Light;
+end;
+
 procedure TCastleApp.BootStrap;
 var
   ProcTimer: Int64;
 begin
+  DbgSingle := 0;
   ProcTimer := CastleGetTickCount64;
   LoadScene('castle-data:/up.glb');
+//  LoadScene('castle-data:/spider.gltf');
+//  LoadScene('castle-data:/boy_character.glb');
+//  LoadScene('C:\\work\\CrazyRabbit\\cr01.gltf');
   ProcTimer := CastleGetTickCount64 - ProcTimer;
   WriteLnLog('ProcTimer (LoadScene) = ' + FormatFloat('####0.000', ProcTimer / 1000) + ' seconds');
+  Resize;
 end;
 
 procedure TCastleApp.ViewFromRadius(const ARadius: Single; const ADirection: TVector3);
@@ -131,12 +157,14 @@ var
 begin
   Spherical := -ADirection.Normalize;
   Spherical := Spherical * ARadius;
-  Viewport.Camera.Up := Vector3(0, 1, 0);
-  Viewport.Camera.Direction := ADirection;
-  Viewport.Camera.Position  := Spherical;
+  Camera.Up := Vector3(0, 1, 0);
+  Camera.Direction := ADirection;
+  Camera.Translation  := Spherical;
 end;
 
 procedure TCastleApp.LoadViewport;
+var
+  Light: TCastleDirectionalLight;
 begin
   VPBackImage := TCastleImageControl.Create({$ifndef cgeapp}CastleForm.{$endif}Window);
   VPBackImage.OwnsImage := True;
@@ -144,42 +172,47 @@ begin
 
   Viewport := TCastleViewport.Create({$ifndef cgeapp}CastleForm.{$endif}Window);
   Viewport.FullSize := False;
-  Viewport.AutoCamera := False;
   Viewport.Setup2D;
   Viewport.Transparent := True;
-  Viewport.NavigationType := ntNone;
-  Viewport.AssignDefaultCamera;
-  Viewport.Width := StateContainer.Width;
-  Viewport.Height := StateContainer.Height;
-  Viewport.Camera.Orthographic.Width := 2;
-  Viewport.Camera.Orthographic.Height := 2;
-  Viewport.Camera.Orthographic.Origin := Vector2(0.5, 0.5);
-  Viewport.Camera.Orthographic.Scale := 1;
-  Viewport.Camera.ProjectionType := ptOrthographic;
+  Viewport.Width := Container.Width;
+  Viewport.Height := Container.Height;
+
+  Camera := TCastleCamera.Create({$ifndef cgeapp}CastleForm.{$endif}Window);
+  Camera.Orthographic.Width := 1;
+  Camera.Orthographic.Height := 1;
+  Camera.Orthographic.Origin := Vector2(0.5, 0.5);
+  Camera.ProjectionType := ptOrthographic;
+
+  Light := CreateDirectionalLight(Viewport.Camera.Translation);
+  Camera.Add(Light);
+
+  Viewport.Items.Add(Camera);
+  Viewport.Camera := Camera;
 
   InsertFront(Viewport);
+//  ViewFromRadius(2, Vector3(0, -1, 0));
 
   CreateButton(BigRedButton, 'Blow up world', 0, @BlowUpWorld);
-  CreateButton(AnotherRedButton, 'Blow up on ReSize', 0, @BlowUpResize, False);
 
+  CreateLabel(LabelBBMin, 4);
+  CreateLabel(LabelBBMax, 3);
+  CreateLabel(LabelCam, 2);
   CreateLabel(LabelFPS, 1);
   CreateLabel(LabelRender, 0);
 
-  ViewFromRadius(2, Vector3(-1, -1, -1));
 end;
 
 procedure TCastleApp.LoadScene(filename: String);
 begin
   try
     Scene := TCastleScene.Create(Application);
-    Scene.Spatial := [ssDynamicCollisions, ssRendering];
+    Scene.PreciseCollisions := False;
     Scene.Load(filename);
     Scene.Normalize;
-    Scene.PrepareResources([prSpatial, prRenderSelf, prRenderClones, prScreenEffects],
-        True,
-        Viewport.PrepareParams);
+    Scene.CastGlobalLights := True;
+
+    Viewport.PrepareResources(Scene);
     Viewport.Items.Add(Scene);
-    Viewport.Items.MainScene := Scene;
   except
     on E : Exception do
       begin
@@ -207,6 +240,54 @@ end;
 procedure TCastleApp.BeforeRender;
 begin
   inherited;
+  if(Assigned(Scene)) then
+    begin
+      if keyShift then
+        begin
+          LabelBBMin.Caption := 'Min = ' + ' (' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[0].X) +
+                                ', ' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[0].Y) +
+                                ', ' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[0].Z) +
+                                ')';
+          LabelBBMax.Caption := 'Max = ' + ' (' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[1].X) +
+                                ',' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[1].Y) +
+                                ', ' +
+                                FormatFloat('##0.0000', Scene.LocalBoundingBox.Data[1].Z) +
+                                ')';
+        end
+    else
+      begin
+        LabelBBMin.Caption := 'Min = ' + ' (' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[0].X) +
+                              ', ' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[0].Y) +
+                              ', ' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[0].Z) +
+                              ')';
+        LabelBBMax.Caption := 'Max = ' + ' (' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[1].X) +
+                              ',' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[1].Y) +
+                              ', ' +
+                              FormatFloat('##0.0000', Scene.BoundingBox.Data[1].Z) +
+                              ')';
+      end;
+      LabelCam.Caption := 'Cam = ' + FormatFloat('####0.00', Camera.Orthographic.Width) +
+                          ' x ' +
+                          FormatFloat('####0.00', Camera.Orthographic.Height) +
+                          ' (' +
+                          FormatFloat('####0.00', Camera.Orthographic.Origin.X) +
+                          ' x ' +
+                          FormatFloat('####0.00', Camera.Orthographic.Origin.Y) +
+                          ')'
+                          + ', BBMax = ' + FormatFloat('#0.000000', DbgSingle)
+                          ;
+
+    end;
   LabelFPS.Caption := 'FPS = ' + FormatFloat('####0.00', Container.Fps.RealFps);
   LabelRender.Caption := 'Render = ' + FormatFloat('####0.00', Container.Fps.OnlyRenderFps);
 
@@ -227,22 +308,26 @@ end;
 procedure TCastleApp.Resize;
 begin
   inherited;
-  if DieOnResize then
-    BlowUpWorld(nil);
-end;
+  Viewport.Width := Container.Width;
+  Viewport.Height := Container.Height;
+  Camera.Orthographic.Width := 1;
+  Camera.Orthographic.Height := 1;
+  Camera.Orthographic.Origin := Vector2(0.5, 0.5);
+  ViewFromRadius(2, Vector3(0, 0, -1));
 
-procedure TCastleApp.BlowUpResize(Sender: TObject);
-begin
-  DieOnResize := True;
 end;
 
 procedure TCastleApp.BlowUpWorld(Sender: TObject);
 begin
+  {
   VPBackImage.Image := MakeTransparentLayerGrid(64, 64, Trunc(Viewport.Width), Trunc(Viewport.Height), 8);
-  VPBackImage.Left := Viewport.Left;
-  VPBackImage.Bottom := Viewport.Bottom;
+  VPBackImage.Translation := Viewport.Translation;
   VPBackImage.Width := Viewport.Width;
   VPBackImage.Height := Viewport.Height;
+  }
+  keyShift := not keyShift;
+  if(Assigned(Scene)) then Scene.Normalize;
+
 end;
 
 procedure TCastleApp.Update(const SecondsPassed: Single; var HandleInput: boolean);
@@ -265,7 +350,7 @@ begin
   Result := inherited;
 end;
 
-procedure TUIStateHelper.CreateButton(var objButton: TCastleButton; const ButtonText: String; const Line: Integer; const ButtonCode: TNotifyEvent = nil; const BottomUp: Boolean = True);
+procedure TCastleViewHelper.CreateButton(var objButton: TCastleButton; const ButtonText: String; const Line: Integer; const ButtonCode: TNotifyEvent = nil; const BottomUp: Boolean = True);
 begin
   objButton := TCastleButton.Create(Self);
   objButton.Caption := ButtonText;
@@ -278,13 +363,11 @@ begin
   InsertFront(objButton);
 end;
 
-procedure TUIStateHelper.CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
+procedure TCastleViewHelper.CreateLabel(var objLabel: TCastleLabel; const Line: Integer; const BottomUp: Boolean = True; RightAlign: Boolean = False);
 begin
   objLabel := TCastleLabel.Create(Self);
   objLabel.Padding := 5;
   objLabel.Color := White;
-  objLabel.Frame := True;
-  objLabel.FrameColor := Black;
   objLabel.Anchor(hpLeft, 10);
   if RightAlign then
     objLabel.Anchor(hpRight, -10)
